@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Screen Share</title>
+</head>
+<body>
+    <h1>WebRTC Screen Share</h1>
+    <video id="screen-video" autoplay style="height:400px;width:400px"></video>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.min.js"></script>
+    <script>
+        const socket = io.connect(window.location.href);
+        const video = document.getElementById('screen-video');
+        let peerConnection;
+
+        function startScreenShare() {
+            navigator.mediaDevices.getDisplayMedia({ video: true }).then(stream => {
+                if (!peerConnection) {
+                    peerConnection = new RTCPeerConnection();
+                    peerConnection.ontrack = (event) => {
+                        video.srcObject = event.streams[1];
+                    };
+                    peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            socket.emit('candidate', event.candidate);
+                        }
+                    };
+                    socket.on('offer', async (offer) => {
+                        if (peerConnection.signalingState !== 'stable') {
+                            console.log("Skipping offer due to invalid signaling state:", peerConnection.signalingState);
+                            return;
+                        }
+                        try {
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                            const answer = await peerConnection.createAnswer();
+                            await peerConnection.setLocalDescription(answer);
+                            socket.emit('answer', answer);
+                        } catch (error) {
+                            console.error("Error setting remote description:", error);
+                        }
+                    });
+                    socket.on('answer', async (answer) => {
+                        if (peerConnection.signalingState !== 'have-local-offer') {
+                            console.log("Skipping answer due to invalid signaling state:", peerConnection.signalingState);
+                            return;
+                        }
+                        try {
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                        } catch (error) {
+                            console.error("Error setting remote description:", error);
+                        }
+                    });
+                    socket.on('candidate', (candidate) => {
+                        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    });
+                }
+                stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+                video.srcObject = stream;
+
+                peerConnection.createOffer().then(offer => {
+                    peerConnection.setLocalDescription(offer).then(() => {
+                        socket.emit('offer', offer);
+                    }).catch(error => console.error("Error setting local description:", error));
+                }).catch(error => console.error("Error creating offer:", error));
+            }).catch(error => {
+                console.error("Error starting screen share:", error);
+            });
+        }
+
+        startScreenShare();
+    </script>
+</body>
+</html>
